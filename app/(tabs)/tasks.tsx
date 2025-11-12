@@ -1,10 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import React, { useEffect, useState } from "react";
 import {
-    Alert,
     Button,
     FlatList,
     Modal,
+    Platform,
     StyleSheet,
     Text,
     TextInput,
@@ -16,6 +17,7 @@ type Task = {
   id: string;
   title: string;
   completed: boolean;
+  dueDate?: string;
 };
 
 const STORAGE_KEY = "@smarttask_tasks";
@@ -23,15 +25,18 @@ const STORAGE_KEY = "@smarttask_tasks";
 export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
+  const [dueDate, setDueDate] = useState<Date | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [editText, setEditText] = useState("");
+  const [editDate, setEditDate] = useState<Date | null>(null);
+  const [showEditPicker, setShowEditPicker] = useState(false);
 
-  // 🧠 Load tasks on app start
+  // Load + save tasks
   useEffect(() => {
     loadTasks();
   }, []);
 
-  // 💾 Save tasks whenever list changes
   useEffect(() => {
     saveTasks(tasks);
   }, [tasks]);
@@ -39,19 +44,17 @@ export default function TasksScreen() {
   const loadTasks = async () => {
     try {
       const stored = await AsyncStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setTasks(JSON.parse(stored));
-      }
-    } catch (err) {
-      console.error("Error loading tasks:", err);
+      if (stored) setTasks(JSON.parse(stored));
+    } catch (e) {
+      console.error("Load error", e);
     }
   };
 
   const saveTasks = async (data: Task[]) => {
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (err) {
-      console.error("Error saving tasks:", err);
+    } catch (e) {
+      console.error("Save error", e);
     }
   };
 
@@ -61,40 +64,47 @@ export default function TasksScreen() {
       id: Date.now().toString(),
       title: taskTitle.trim(),
       completed: false,
+      dueDate: dueDate ? dueDate.toISOString().split("T")[0] : undefined,
     };
     setTasks((prev) => [...prev, newTask]);
     setTaskTitle("");
+    setDueDate(null);
   };
 
-  const deleteTask = (id: string) => {
-    Alert.alert("Delete Task", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => setTasks((prev) => prev.filter((t) => t.id !== id)) },
-    ]);
-  };
+  const deleteTask = (id: string) =>
+    setTasks((prev) => prev.filter((t) => t.id !== id));
 
-  const toggleComplete = (id: string) => {
+  const toggleComplete = (id: string) =>
     setTasks((prev) =>
       prev.map((t) =>
         t.id === id ? { ...t, completed: !t.completed } : t
       )
     );
-  };
 
   const openEdit = (task: Task) => {
     setEditTask(task);
     setEditText(task.title);
+    setEditDate(task.dueDate ? new Date(task.dueDate) : null);
   };
 
   const saveEdit = () => {
     if (editTask && editText.trim()) {
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === editTask.id ? { ...t, title: editText.trim() } : t
+          t.id === editTask.id
+            ? {
+                ...t,
+                title: editText.trim(),
+                dueDate: editDate
+                  ? editDate.toISOString().split("T")[0]
+                  : undefined,
+              }
+            : t
         )
       );
       setEditTask(null);
       setEditText("");
+      setEditDate(null);
     }
   };
 
@@ -102,6 +112,7 @@ export default function TasksScreen() {
     <View style={styles.container}>
       <Text style={styles.header}>Your Tasks</Text>
 
+      {/* Add Task Row */}
       <View style={styles.inputRow}>
         <TextInput
           placeholder="Enter new task..."
@@ -109,9 +120,29 @@ export default function TasksScreen() {
           onChangeText={setTaskTitle}
           style={styles.input}
         />
+        <Button title="Pick Date" onPress={() => setShowPicker(true)} />
         <Button title="Add" onPress={addTask} />
       </View>
 
+      {dueDate && (
+        <Text style={styles.dateLabel}>
+          Due: {dueDate.toISOString().split("T")[0]}
+        </Text>
+      )}
+
+      {showPicker && (
+        <DateTimePicker
+          value={dueDate || new Date()}
+          mode="date"
+          display={Platform.OS === "ios" ? "spinner" : "default"}
+          onChange={(_, date) => {
+            setShowPicker(false);
+            if (date) setDueDate(date);
+          }}
+        />
+      )}
+
+      {/* Task List */}
       {tasks.length === 0 ? (
         <Text style={{ marginTop: 40, color: "gray" }}>
           No tasks yet — add one!
@@ -131,6 +162,11 @@ export default function TasksScreen() {
                 >
                   {item.title}
                 </Text>
+                {item.dueDate && (
+                  <Text style={styles.dueDate}>
+                    📅 {item.dueDate}
+                  </Text>
+                )}
               </TouchableOpacity>
 
               <View style={styles.actions}>
@@ -162,6 +198,26 @@ export default function TasksScreen() {
               onChangeText={setEditText}
               style={styles.modalInput}
             />
+            <Button
+              title="Change Date"
+              onPress={() => setShowEditPicker(true)}
+            />
+            {editDate && (
+              <Text style={styles.dateLabel}>
+                Due: {editDate.toISOString().split("T")[0]}
+              </Text>
+            )}
+            {showEditPicker && (
+              <DateTimePicker
+                value={editDate || new Date()}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                onChange={(_, date) => {
+                  setShowEditPicker(false);
+                  if (date) setEditDate(date);
+                }}
+              />
+            )}
             <View style={styles.modalButtons}>
               <Button title="Cancel" color="gray" onPress={() => setEditTask(null)} />
               <Button title="Save" onPress={saveEdit} />
@@ -185,7 +241,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    marginBottom: 20,
+    marginBottom: 10,
   },
   input: {
     flex: 1,
@@ -193,6 +249,11 @@ const styles = StyleSheet.create({
     borderColor: "#ccc",
     padding: 10,
     borderRadius: 8,
+  },
+  dateLabel: {
+    textAlign: "center",
+    color: "#333",
+    marginBottom: 10,
   },
   taskRow: {
     flexDirection: "row",
@@ -208,6 +269,7 @@ const styles = StyleSheet.create({
     textDecorationLine: "line-through",
     color: "gray",
   },
+  dueDate: { color: "#666", fontSize: 14 },
   actions: { flexDirection: "row", gap: 10 },
   editButton: {
     backgroundColor: "#4CAF50",
@@ -234,7 +296,6 @@ const styles = StyleSheet.create({
     width: "80%",
     padding: 20,
     borderRadius: 12,
-    elevation: 5,
   },
   modalHeader: {
     fontSize: 20,
