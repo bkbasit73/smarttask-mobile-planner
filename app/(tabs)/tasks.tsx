@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import React, { useEffect, useState } from "react";
 import {
+    Alert,
     Button,
     FlatList,
     Modal,
@@ -16,11 +18,42 @@ type Task = {
   completed: boolean;
 };
 
+const STORAGE_KEY = "@smarttask_tasks";
+
 export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [editText, setEditText] = useState("");
+
+  // 🧠 Load tasks on app start
+  useEffect(() => {
+    loadTasks();
+  }, []);
+
+  // 💾 Save tasks whenever list changes
+  useEffect(() => {
+    saveTasks(tasks);
+  }, [tasks]);
+
+  const loadTasks = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        setTasks(JSON.parse(stored));
+      }
+    } catch (err) {
+      console.error("Error loading tasks:", err);
+    }
+  };
+
+  const saveTasks = async (data: Task[]) => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (err) {
+      console.error("Error saving tasks:", err);
+    }
+  };
 
   const addTask = () => {
     if (!taskTitle.trim()) return;
@@ -34,7 +67,10 @@ export default function TasksScreen() {
   };
 
   const deleteTask = (id: string) => {
-    setTasks((prev) => prev.filter((task) => task.id !== id));
+    Alert.alert("Delete Task", "Are you sure?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => setTasks((prev) => prev.filter((t) => t.id !== id)) },
+    ]);
   };
 
   const toggleComplete = (id: string) => {
@@ -187,8 +223,6 @@ const styles = StyleSheet.create({
   },
   editText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   deleteText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-
-  // Modal styles
   modalContainer: {
     flex: 1,
     justifyContent: "center",
