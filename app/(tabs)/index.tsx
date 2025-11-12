@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { ThemeContext } from "../_layout";
 
 type Task = {
   id: string;
@@ -11,30 +12,36 @@ type Task = {
 const STORAGE_KEY = "@smarttask_tasks";
 
 export default function DashboardScreen() {
+  const { theme } = useContext(ThemeContext);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadTasks();
-  }, []);
-
-  const loadTasks = async () => {
-    try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setTasks(JSON.parse(stored));
+    const loadTasks = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          setTasks(JSON.parse(stored));
+        }
+      } catch (err) {
+        console.error("Error loading tasks:", err);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error("Error loading tasks:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+
+    // Load immediately and refresh when screen revisits
+    loadTasks();
+
+    // Add listener to refresh when returning to dashboard tab
+    const interval = setInterval(loadTasks, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <Text>Loading...</Text>
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
+        <Text style={{ color: theme.text }}>Loading...</Text>
       </View>
     );
   }
@@ -51,16 +58,27 @@ export default function DashboardScreen() {
       : "No tasks yet — start adding some!";
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Dashboard</Text>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
+      <Text style={[styles.title, { color: theme.text }]}>Dashboard</Text>
 
-      <View style={styles.statsBox}>
-        <Text style={styles.statText}>Total Tasks: {total}</Text>
-        <Text style={styles.statText}>Completed: {completed}</Text>
-        <Text style={styles.statText}>Pending: {pending}</Text>
+      <View
+        style={[
+          styles.statsBox,
+          { backgroundColor: theme.card, borderColor: theme.accent },
+        ]}
+      >
+        <Text style={[styles.statText, { color: theme.text }]}>
+          Total Tasks: {total}
+        </Text>
+        <Text style={[styles.statText, { color: theme.text }]}>
+          Completed: {completed}
+        </Text>
+        <Text style={[styles.statText, { color: theme.text }]}>
+          Pending: {pending}
+        </Text>
       </View>
 
-      <Text style={styles.message}>{message}</Text>
+      <Text style={[styles.message, { color: theme.text }]}>{message}</Text>
     </View>
   );
 }
@@ -70,7 +88,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
     padding: 20,
   },
   title: {
@@ -79,11 +96,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   statsBox: {
-    backgroundColor: "#f0f0f0",
     padding: 20,
     borderRadius: 12,
     alignItems: "center",
     width: "90%",
+    borderWidth: 1,
   },
   statText: {
     fontSize: 18,
@@ -93,6 +110,5 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginTop: 25,
     textAlign: "center",
-    color: "#444",
   },
 });
