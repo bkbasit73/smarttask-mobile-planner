@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
     Button,
     FlatList,
+    Modal,
     StyleSheet,
     Text,
     TextInput,
@@ -12,17 +13,21 @@ import {
 type Task = {
   id: string;
   title: string;
+  completed: boolean;
 };
 
 export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [editText, setEditText] = useState("");
 
   const addTask = () => {
-    if (!taskTitle.trim()) return; // ignore empty input
+    if (!taskTitle.trim()) return;
     const newTask: Task = {
       id: Date.now().toString(),
       title: taskTitle.trim(),
+      completed: false,
     };
     setTasks((prev) => [...prev, newTask]);
     setTaskTitle("");
@@ -30,6 +35,31 @@ export default function TasksScreen() {
 
   const deleteTask = (id: string) => {
     setTasks((prev) => prev.filter((task) => task.id !== id));
+  };
+
+  const toggleComplete = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === id ? { ...t, completed: !t.completed } : t
+      )
+    );
+  };
+
+  const openEdit = (task: Task) => {
+    setEditTask(task);
+    setEditText(task.title);
+  };
+
+  const saveEdit = () => {
+    if (editTask && editText.trim()) {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === editTask.id ? { ...t, title: editText.trim() } : t
+        )
+      );
+      setEditTask(null);
+      setEditText("");
+    }
   };
 
   return (
@@ -56,27 +86,59 @@ export default function TasksScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <View style={styles.taskRow}>
-              <Text style={styles.taskText}>{item.title}</Text>
-              <TouchableOpacity
-                onPress={() => deleteTask(item.id)}
-                style={styles.deleteButton}
-              >
-                <Text style={styles.deleteText}>✕</Text>
+              <TouchableOpacity onPress={() => toggleComplete(item.id)}>
+                <Text
+                  style={[
+                    styles.taskText,
+                    item.completed && styles.completedText,
+                  ]}
+                >
+                  {item.title}
+                </Text>
               </TouchableOpacity>
+
+              <View style={styles.actions}>
+                <TouchableOpacity
+                  onPress={() => openEdit(item)}
+                  style={styles.editButton}
+                >
+                  <Text style={styles.editText}>✎</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => deleteTask(item.id)}
+                  style={styles.deleteButton}
+                >
+                  <Text style={styles.deleteText}>✕</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
         />
       )}
+
+      {/* Edit Modal */}
+      <Modal visible={!!editTask} transparent animationType="slide">
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalHeader}>Edit Task</Text>
+            <TextInput
+              value={editText}
+              onChangeText={setEditText}
+              style={styles.modalInput}
+            />
+            <View style={styles.modalButtons}>
+              <Button title="Cancel" color="gray" onPress={() => setEditTask(null)} />
+              <Button title="Save" onPress={saveEdit} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: "#fff",
-  },
+  container: { flex: 1, padding: 20, backgroundColor: "#fff" },
   header: {
     fontSize: 26,
     fontWeight: "bold",
@@ -105,18 +167,56 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     borderRadius: 8,
   },
-  taskText: {
-    fontSize: 18,
+  taskText: { fontSize: 18 },
+  completedText: {
+    textDecorationLine: "line-through",
+    color: "gray",
+  },
+  actions: { flexDirection: "row", gap: 10 },
+  editButton: {
+    backgroundColor: "#4CAF50",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   deleteButton: {
     backgroundColor: "#ff6b6b",
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  deleteText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
+  editText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+  deleteText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+
+  // Modal styles
+  modalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.3)",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    width: "80%",
+    padding: 20,
+    borderRadius: 12,
+    elevation: 5,
+  },
+  modalHeader: {
+    fontSize: 20,
+    fontWeight: "600",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "space-between",
   },
 });
