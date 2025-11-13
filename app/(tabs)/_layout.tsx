@@ -6,12 +6,16 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={({ route }) => ({
         headerShown: false,
+        tabBarActiveTintColor: "#4CAF50",
+        tabBarInactiveTintColor: "gray",
         tabBarIcon: ({ color, size }) => {
-          let icon = "home";
-          if (route.name === "index") icon = "home";
-          if (route.name === "tasks") icon = "list";
-          if (route.name === "calendar") icon = "calendar";
-          return <Ionicons name={icon} size={size} color={color} />;
+          let iconName: keyof typeof Ionicons.glyphMap = "home-outline";
+
+          if (route.name === "index") iconName = "home-outline";
+          else if (route.name === "tasks") iconName = "list-outline";
+          else if (route.name === "calendar") iconName = "calendar-outline";
+
+          return <Ionicons name={iconName} size={size} color={color} />;
         },
       })}
     >

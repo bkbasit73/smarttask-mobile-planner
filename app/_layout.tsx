@@ -1,38 +1,53 @@
-import { ThemeProvider } from "@react-navigation/native";
-import { Stack } from "expo-router";
-import React, { useState } from "react";
-import { Pressable, Text, View } from "react-native";
-import { darkTheme, lightTheme } from "../constants/theme";
+import { Stack, router, useSegments } from "expo-router";
+import { onAuthStateChanged } from "firebase/auth";
+import React, { createContext, useEffect, useState } from "react";
+import { Appearance } from "react-native";
+import { auth } from "../firebaseConfig";
+
+export const ThemeContext = createContext({
+  theme: { background: "", text: "", card: "", accent: "" },
+  toggleTheme: () => {},
+});
 
 export default function RootLayout() {
-  const [dark, setDark] = useState(false);
-  const theme = dark ? darkTheme : lightTheme;
+  const segments = useSegments();
+  const [isLogged, setIsLogged] = useState(false);
+  const [themeMode, setThemeMode] = useState(Appearance.getColorScheme() || "light");
+
+  const theme =
+    themeMode === "light"
+      ? {
+          background: "#ffffff",
+          text: "#000000",
+          card: "#f4f4f4",
+          accent: "#4CAF50",
+        }
+      : {
+          background: "#000000",
+          text: "#ffffff",
+          card: "#222222",
+          accent: "#90EE90",
+        };
+
+  const toggleTheme = () =>
+    setThemeMode((prev) => (prev === "light" ? "dark" : "light"));
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (user) => {
+      setIsLogged(!!user);
+
+      if (!user && segments[0] !== "auth") {
+        router.replace("/auth/login");
+      }
+      if (user && segments[0] === "auth") {
+        router.replace("/(tabs)");
+      }
+    });
+  }, []);
 
   return (
-    <ThemeProvider value={theme}>
-      <View style={{ flex: 1, backgroundColor: theme.background }}>
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: theme.background },
-          }}
-        />
-        <View style={{ position: "absolute", top: 40, right: 20 }}>
-          <Pressable
-            onPress={() => setDark(!dark)}
-            style={({ pressed }) => ({
-              backgroundColor: theme.accent,
-              padding: 10,
-              borderRadius: 8,
-              opacity: pressed ? 0.8 : 1,
-            })}
-          >
-            <Text style={{ color: theme.text, fontSize: 16 }}>
-              {dark ? "☀️ Light" : "🌙 Dark"}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-    </ThemeProvider>
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+      <Stack screenOptions={{ headerShown: false }} />
+    </ThemeContext.Provider>
   );
 }
