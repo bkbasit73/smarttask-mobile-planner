@@ -5,28 +5,41 @@ import { Appearance } from "react-native";
 import { auth } from "../firebaseConfig";
 
 export const ThemeContext = createContext({
-  theme: { background: "", text: "", card: "", accent: "" },
+  theme: {
+    background: "",
+    text: "",
+    card: "",
+    accent: "",
+    subtle: "",
+  },
   toggleTheme: () => {},
 });
 
 export default function RootLayout() {
   const segments = useSegments();
   const [isLogged, setIsLogged] = useState(false);
-  const [themeMode, setThemeMode] = useState(Appearance.getColorScheme() || "light");
+  const [themeMode, setThemeMode] = useState(
+    Appearance.getColorScheme() || "dark"
+  );
+
+  const lightText = "#0f172a";
+  const darkText = "#f9fafb";
 
   const theme =
     themeMode === "light"
       ? {
-          background: "#ffffff",
-          text: "#000000",
-          card: "#f4f4f4",
-          accent: "#4CAF50",
+          background: "#fdf2ff", 
+          text: lightText,
+          card: "#ffffff",
+          accent: "#a855f7", 
+          subtle: lightText + "99", 
         }
       : {
-          background: "#000000",
-          text: "#ffffff",
-          card: "#222222",
-          accent: "#90EE90",
+          background: "#020617", 
+          text: darkText,
+          card: "#111827", 
+          accent: "#22c55e", 
+          subtle: darkText + "80", 
         };
 
   const toggleTheme = () =>

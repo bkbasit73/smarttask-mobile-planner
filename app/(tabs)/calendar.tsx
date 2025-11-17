@@ -3,6 +3,7 @@ import { FlatList, StyleSheet, Text, View } from "react-native";
 import { Calendar } from "react-native-calendars";
 import { ThemeContext } from "../_layout";
 
+import { MaterialIcons } from "@expo/vector-icons";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../../firebaseConfig";
 
@@ -37,7 +38,7 @@ export default function CalendarScreen() {
     loadTasks();
   }, []);
 
-  // Prepare marked dates for calendar
+  // marked dates for calendar
   const marked: any = {};
   tasks.forEach((t) => {
     if (t.dueDate) {
@@ -50,9 +51,7 @@ export default function CalendarScreen() {
     }
   });
 
-  const tasksForSelectedDay = tasks.filter(
-    (t) => t.dueDate === selectedDate
-  );
+  const tasksForSelectedDay = tasks.filter((t) => t.dueDate === selectedDate);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -65,21 +64,43 @@ export default function CalendarScreen() {
           monthTextColor: theme.text,
           textMonthFontWeight: "bold",
           todayTextColor: theme.accent,
+          selectedDayBackgroundColor: theme.accent,
+          selectedDayTextColor: "#000000",
         }}
+        style={styles.calendar}
       />
 
-      <Text style={[styles.header, { color: theme.text }]}>
-        {selectedDate ? `Tasks for ${selectedDate}` : "Select a date"}
-      </Text>
+      <View
+        style={[
+          styles.sectionHeader,
+          { borderColor: theme.accent, backgroundColor: theme.card },
+        ]}
+      >
+        <MaterialIcons
+          name="event-note"
+          size={20}
+          color={theme.accent || "#4CAF50"}
+          style={{ marginRight: 6 }}
+        />
+        <Text style={[styles.sectionHeaderText, { color: theme.text }]}>
+          {selectedDate ? `Tasks for ${selectedDate}` : "Select a date"}
+        </Text>
+      </View>
 
       {tasksForSelectedDay.length === 0 ? (
-        <Text style={{ color: theme.text, marginTop: 10 }}>
+        <Text
+          style={[
+            styles.emptyText,
+            { color: theme.subtle, marginTop: 10, textAlign: "center" },
+          ]}
+        >
           No tasks due on this date.
         </Text>
       ) : (
         <FlatList
           data={tasksForSelectedDay}
           keyExtractor={(t) => t.id}
+          contentContainerStyle={{ paddingVertical: 10 }}
           renderItem={({ item }) => (
             <View
               style={[
@@ -93,9 +114,17 @@ export default function CalendarScreen() {
               <Text style={[styles.taskTitle, { color: theme.text }]}>
                 {item.title}
               </Text>
-              <Text style={{ color: theme.text }}>
-                Status: {item.completed ? "✔ Done" : "⏳ Pending"}
-              </Text>
+              <View style={styles.statusRow}>
+                <MaterialIcons
+                  name={item.completed ? "check-circle" : "hourglass-empty"}
+                  size={16}
+                  color={item.completed ? "#4CAF50" : theme.accent}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={{ color: theme.text }}>
+                  {item.completed ? "Done" : "Pending"}
+                </Text>
+              </View>
             </View>
           )}
         />
@@ -106,21 +135,44 @@ export default function CalendarScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 10 },
-  header: {
-    fontSize: 20,
-    marginTop: 15,
-    marginBottom: 10,
-    textAlign: "center",
-    fontWeight: "bold",
+  calendar: {
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  sectionHeaderText: {
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  emptyText: {
+    fontSize: 14,
   },
   taskBox: {
     padding: 15,
     borderRadius: 10,
     borderWidth: 1,
     marginBottom: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
   },
   taskTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
 });
