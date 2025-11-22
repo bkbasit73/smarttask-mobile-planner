@@ -1,13 +1,13 @@
 import { MaterialIcons } from "@expo/vector-icons";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from "expo-router";
-import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
 import React, { useContext, useState, useRef, useEffect } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,33 +16,36 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  AppState,
 } from "react-native";
 import { auth } from "../../firebaseConfig";
 import { ThemeContext } from "../_layout";
 
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 const PASSWORD_VISIBLE_TIMEOUT = 5000;
 
-export default function Register() {
+export default function Login() {
   const { theme } = useContext(ThemeContext);
 
-  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  
-  const [nameError, setNameError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [passwordError, setPasswordError] = useState("");
-  const [confirmPasswordError, setConfirmPasswordError] = useState("");
-  const [passwordStrength, setPasswordStrength] = useState({ level: 0, text: "", color: "" });
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [lockoutTime, setLockoutTime] = useState(null);
+  const [remainingTime, setRemainingTime] = useState(0);
+  const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
+  const [timeoutCountdown, setTimeoutCountdown] = useState(60);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
   const passwordVisibilityTimer = useRef(null);
-  const confirmPasswordVisibilityTimer = useRef(null);
+  const inactivityTimer = useRef(null);
+  const appState = useRef(AppState.currentState);
 
   useEffect(() => {
     Animated.parallel([
@@ -58,7 +61,48 @@ export default function Register() {
         useNativeDriver: true,
       }),
     ]).start();
+
+    loadLockoutData();
   }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        resetInactivityTimer();
+      }
+      appState.current = nextAppState;
+    });
+
+    resetInactivityTimer();
+
+    return () => {
+      subscription.remove();
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (lockoutTime) {
+      const interval = setInterval(async () => {
+        const now = Date.now();
+        const remaining = Math.max(0, Math.ceil((lockoutTime - now) / 1000));
+        setRemainingTime(remaining);
+
+        if (remaining === 0) {
+          setLockoutTime(null);
+          setLoginAttempts(0);
+          try {
+            await AsyncStorage.removeItem('loginLockoutTime');
+            await AsyncStorage.removeItem('loginAttempts');
+          } catch (error) {
+            console.error("Error clearing lockout:", error);
+          }
+        }
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [lockoutTime]);
 
   useEffect(() => {
     if (showPassword) {
@@ -78,91 +122,64 @@ export default function Register() {
     };
   }, [showPassword]);
 
-  useEffect(() => {
-    if (showConfirmPassword) {
-      if (confirmPasswordVisibilityTimer.current) {
-        clearTimeout(confirmPasswordVisibilityTimer.current);
+  const loadLockoutData = async () => {
+    try {
+      const savedLockoutTime = await AsyncStorage.getItem('loginLockoutTime');
+      if (savedLockoutTime) {
+        const lockTime = parseInt(savedLockoutTime);
+        const now = Date.now();
+        if (now < lockTime) {
+          setLockoutTime(lockTime);
+        } else {
+          await AsyncStorage.removeItem('loginLockoutTime');
+          await AsyncStorage.removeItem('loginAttempts');
+        }
       }
-      
-      confirmPasswordVisibilityTimer.current = setTimeout(() => {
-        setShowConfirmPassword(false);
-      }, PASSWORD_VISIBLE_TIMEOUT);
-    }
 
-    return () => {
-      if (confirmPasswordVisibilityTimer.current) {
-        clearTimeout(confirmPasswordVisibilityTimer.current);
+      const savedAttempts = await AsyncStorage.getItem('loginAttempts');
+      if (savedAttempts) {
+        setLoginAttempts(parseInt(savedAttempts));
       }
-    };
-  }, [showConfirmPassword]);
+    } catch (error) {
+      console.error("Error loading lockout data:", error);
+    }
+  };
+
+  const resetInactivityTimer = () => {
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    setShowTimeoutWarning(false);
+    
+    inactivityTimer.current = setTimeout(() => {
+      setShowTimeoutWarning(true);
+      let countdown = 60;
+      setTimeoutCountdown(countdown);
+      
+      const countdownInterval = setInterval(() => {
+        countdown -= 1;
+        setTimeoutCountdown(countdown);
+        
+        if (countdown <= 0) {
+          clearInterval(countdownInterval);
+          Alert.alert(
+            "Session Expired",
+            "You've been logged out due to inactivity for security purposes.",
+            [{ 
+              text: "OK", 
+              onPress: () => {
+                setEmail("");
+                setPassword("");
+                setShowTimeoutWarning(false);
+                resetInactivityTimer();
+              }
+            }]
+          );
+        }
+      }, 1000);
+    }, INACTIVITY_TIMEOUT);
+  };
 
   const sanitizeInput = (input) => {
     return input.replace(/[<>\"'`]/g, '').trim();
-  };
-
-  const calculatePasswordStrength = (password) => {
-    if (!password) {
-      return { level: 0, text: "", color: "" };
-    }
-
-    let strength = 0;
-    
-    if (password.length >= 6) strength += 1;
-    if (password.length >= 8) strength += 1;
-    if (password.length >= 12) strength += 1;
-    
-    if (/[a-z]/.test(password)) strength += 1;
-    if (/[A-Z]/.test(password)) strength += 1;
-    if (/\d/.test(password)) strength += 1;
-    if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) strength += 1;
-    
-    const weakPasswords = ['123456', 'password', '12345678', 'qwerty', 'abc123', '111111', 'letmein', '123123', 'welcome', 'monkey'];
-    if (weakPasswords.includes(password.toLowerCase())) {
-      return { level: 1, text: "Very Weak", color: "#ef4444" };
-    }
-    
-    if (/(.)\1{2,}/.test(password)) strength -= 1;
-    if (/012|123|234|345|456|567|678|789|890|abc|bcd|cde|def/i.test(password)) strength -= 1;
-    
-    if (strength <= 2) {
-      return { level: 1, text: "Weak", color: "#ef4444" };
-    } else if (strength <= 4) {
-      return { level: 2, text: "Fair", color: "#f59e0b" };
-    } else if (strength <= 5) {
-      return { level: 3, text: "Good", color: "#3b82f6" };
-    } else if (strength <= 6) {
-      return { level: 4, text: "Strong", color: "#22c55e" };
-    } else {
-      return { level: 5, text: "Very Strong", color: "#16a34a" };
-    }
-  };
-
-  const validateName = (name) => {
-    const sanitized = sanitizeInput(name);
-    
-    if (!sanitized) {
-      setNameError("Full name is required");
-      return false;
-    }
-
-    if (sanitized.length < 2) {
-      setNameError("Name must be at least 2 characters");
-      return false;
-    }
-
-    if (sanitized.length > 50) {
-      setNameError("Name must be less than 50 characters");
-      return false;
-    }
-
-    const nameRegex = /^[a-zA-Z\s'-]+$/;
-    if (!nameRegex.test(sanitized)) {
-      setNameError("Name can only contain letters, spaces, hyphens, and apostrophes");
-      return false;
-    }
-
-    setNameError("");
-    return true;
   };
 
   const validateEmail = (email) => {
@@ -190,11 +207,6 @@ export default function Register() {
       return false;
     }
 
-    if (sanitized.length > 254) {
-      setEmailError("Email is too long");
-      return false;
-    }
-
     setEmailError("");
     return true;
   };
@@ -210,143 +222,147 @@ export default function Register() {
       return false;
     }
 
-    if (password.length > 128) {
-      setPasswordError("Password is too long (max 128 characters)");
-      return false;
-    }
-
-    const weakPasswords = ['123456', 'password', '12345678', 'qwerty', 'abc123', '111111', 'letmein', '123123', 'welcome', 'monkey'];
-    if (weakPasswords.includes(password.toLowerCase())) {
-      setPasswordError("This password is too common and easily guessed");
-      return false;
-    }
-
-    if (/012|123|234|345|456|567|678|789|890|abc|bcd|cde|def/i.test(password)) {
-      setPasswordError("Avoid using sequential characters");
-      return false;
-    }
-
-    if (/(.)\1{2,}/.test(password)) {
-      setPasswordError("Avoid repeating the same character multiple times");
-      return false;
-    }
-
-    const hasUpperCase = /[A-Z]/.test(password);
-    const hasLowerCase = /[a-z]/.test(password);
-    const hasNumbers = /\d/.test(password);
-    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-
-    const strengthCount = [hasUpperCase, hasLowerCase, hasNumbers, hasSpecialChar].filter(Boolean).length;
-    
-    if (strengthCount < 2 && password.length < 8) {
-      setPasswordError("Use a mix of uppercase, lowercase, numbers, or special characters");
-      return false;
-    }
-
     setPasswordError("");
     return true;
   };
 
-  const validateConfirmPassword = (confirmPass) => {
-    if (!confirmPass) {
-      setConfirmPasswordError("Please confirm your password");
-      return false;
-    }
-
-    if (confirmPass !== password) {
-      setConfirmPasswordError("Passwords do not match");
-      return false;
-    }
-
-    setConfirmPasswordError("");
-    return true;
-  };
-
-  const handleRegister = async () => {
-    Keyboard.dismiss();
-
-    const nameValid = validateName(fullName);
-    const emailValid = validateEmail(email);
-    const passwordValid = validatePassword(password);
-    const confirmPasswordValid = validateConfirmPassword(confirmPassword);
-
-    if (!nameValid || !emailValid || !passwordValid || !confirmPasswordValid) {
+  const handleForgotPassword = async () => {
+    if (!email) {
+      Alert.alert("Email Required", "Please enter your email address first");
       return;
     }
+
+    if (!validateEmail(email)) {
+      Alert.alert("Invalid Email", "Please enter a valid email address");
+      return;
+    }
+
+    Alert.alert(
+      "Reset Password",
+      `Send password reset email to:\n${email}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send Email",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await sendPasswordResetEmail(auth, sanitizeInput(email));
+              setLoading(false);
+              Alert.alert(
+                "✓ Email Sent Successfully",
+                "Check your inbox for password reset instructions. The link expires in 1 hour.\n\nDon't forget to check your spam folder!",
+                [{ text: "OK" }]
+              );
+            } catch (error) {
+              setLoading(false);
+              console.error("Password reset error:", error);
+              
+              let errorMessage = "Unable to send password reset email. Please try again.";
+              
+              if (error.code === "auth/user-not-found") {
+                errorMessage = "No account found with this email address.";
+              } else if (error.code === "auth/invalid-email") {
+                errorMessage = "Invalid email address format.";
+              } else if (error.code === "auth/too-many-requests") {
+                errorMessage = "Too many password reset requests. Please wait 5 minutes before trying again.";
+              }
+              
+              Alert.alert("Reset Failed", errorMessage);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleLogin = async () => {
+    resetInactivityTimer();
+
+    if (lockoutTime && Date.now() < lockoutTime) {
+      const minutes = Math.ceil(remainingTime / 60);
+      Alert.alert(
+        "Account Temporarily Locked",
+        `Too many failed login attempts. Please wait ${minutes} minute${minutes > 1 ? 's' : ''} before trying again.`,
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    Keyboard.dismiss();
+
+    const emailValid = validateEmail(email);
+    const passwordValid = validatePassword(password);
+
+    if (!emailValid || !passwordValid) return;
 
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        sanitizeInput(email),
-        password
-      );
-
-      await updateProfile(userCredential.user, {
-        displayName: sanitizeInput(fullName),
-      });
-
-      // Send email verification
-      await sendEmailVerification(userCredential.user);
-
-      Alert.alert(
-        "✓ Account Created Successfully",
-        `Welcome to SmartTask, ${sanitizeInput(fullName)}!\n\nA verification email has been sent to:\n${sanitizeInput(email)}\n\nPlease verify your email before logging in. Check your spam folder if you don't see it.`,
-        [
-          {
-            text: "Go to Login",
-            onPress: () => {
-              setFullName("");
-              setEmail("");
-              setPassword("");
-              setConfirmPassword("");
-              router.push("/auth/login");
-            },
-          },
-        ]
-      );
+      await signInWithEmailAndPassword(auth, sanitizeInput(email), password);
+      
+      setLoginAttempts(0);
+      await AsyncStorage.removeItem('loginAttempts');
+      await AsyncStorage.removeItem('loginLockoutTime');
+      
+      setPassword("");
+      
+      router.replace("/(tabs)");
     } catch (error) {
       setLoading(false);
-      console.error("Registration error:", error);
+      console.error("Login error:", error);
 
-      let title = "Registration Failed";
-      let message = "Unable to create account. Please try again.";
+      const newAttempts = loginAttempts + 1;
+      setLoginAttempts(newAttempts);
+      await AsyncStorage.setItem('loginAttempts', newAttempts.toString());
 
-      if (error.code === "auth/email-already-in-use") {
-        title = "Account Already Exists";
-        message = "An account with this email already exists. Please login instead or use a different email address.";
+      if (newAttempts >= MAX_LOGIN_ATTEMPTS) {
+        const lockTime = Date.now() + LOCKOUT_DURATION;
+        setLockoutTime(lockTime);
+        await AsyncStorage.setItem('loginLockoutTime', lockTime.toString());
         
-        Alert.alert(title, message, [
-          {
-            text: "Go to Login",
-            onPress: () => router.push("/auth/login"),
-          },
-          {
-            text: "Try Different Email",
-            style: "cancel",
-          },
-        ]);
+        Alert.alert(
+          "Account Locked",
+          `Too many failed login attempts. Your account is locked for 15 minutes for security purposes.`,
+          [{ text: "OK" }]
+        );
         return;
-      } else if (error.code === "auth/invalid-email") {
-        message = "Invalid email address format.";
-      } else if (error.code === "auth/operation-not-allowed") {
-        message = "Email/password accounts are not enabled. Please contact support.";
-      } else if (error.code === "auth/weak-password") {
-        message = "Password is too weak. Please use a stronger password.";
+      }
+
+      let title = "Login Failed";
+      let message = "Invalid email or password";
+      const attemptsLeft = MAX_LOGIN_ATTEMPTS - newAttempts;
+
+      if (error.code === "auth/user-not-found") {
+        message = `No account found with this email. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
+      } else if (error.code === "auth/wrong-password") {
+        message = `Incorrect password. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
+      } else if (error.code === "auth/invalid-credential") {
+        message = `Invalid email or password. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
+      } else if (error.code === "auth/too-many-requests") {
+        title = "Too Many Attempts";
+        message = "Account temporarily locked by Firebase. Please reset your password or wait before trying again.";
       } else if (error.code === "auth/network-request-failed") {
         title = "Network Error";
         message = "Please check your internet connection and try again.";
-      } else if (error.code === "auth/too-many-requests") {
-        title = "Too Many Requests";
-        message = "Too many registration attempts. Please try again later.";
+      } else if (error.code === "auth/user-disabled") {
+        title = "Account Disabled";
+        message = "This account has been disabled. Please contact support.";
       }
 
-      Alert.alert(title, message, [{ text: "OK" }]);
+      setTimeout(() => {
+        Alert.alert(title, message, [{ text: "OK" }]);
+      }, 100);
       return;
     }
-
+    
     setLoading(false);
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -355,271 +371,206 @@ export default function Register() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.centerWrapper}>
-            <Animated.View
-              style={[
-                styles.card,
-                {
-                  backgroundColor: theme.card,
-                  borderColor: theme.accent,
-                  opacity: fadeAnim,
-                  transform: [{ translateY: slideAnim }],
-                },
-              ]}
-            >
-              <View style={styles.iconCircle}>
-                <MaterialIcons name="person-add" size={26} color={theme.accent} />
-              </View>
+        <View style={styles.centerWrapper}>
+          <Animated.View
+            style={[
+              styles.card,
+              {
+                backgroundColor: theme.card,
+                borderColor: theme.accent,
+                opacity: fadeAnim,
+                transform: [{ translateY: slideAnim }],
+              },
+            ]}
+          >
+            <View style={styles.iconCircle}>
+              <MaterialIcons name="security" size={26} color={theme.accent} />
+            </View>
 
-              <Text style={[styles.title, { color: theme.text }]}>Create Account</Text>
-              <Text style={[styles.subtitle, { color: theme.subtle }]}>
-                Join SmartTask with secure authentication
-              </Text>
+            <Text style={[styles.title, { color: theme.text }]}>Secure Login</Text>
+            <Text style={[styles.subtitle, { color: theme.subtle }]}>
+              Protected access to your SmartTask account
+            </Text>
 
-              <View style={styles.inputWrapper}>
-                <View style={styles.inputIconContainer}>
-                  <MaterialIcons name="person" size={20} color={theme.subtle} />
-                </View>
-                <TextInput
-                  placeholder="Full Name"
-                  placeholderTextColor={theme.subtle}
-                  autoCapitalize="words"
-                  autoComplete="name"
-                  textContentType="name"
-                  value={fullName}
-                  onChangeText={(text) => {
-                    setFullName(text);
-                    if (nameError) validateName(text);
+            {showTimeoutWarning && (
+              <View style={[styles.timeoutBanner, { backgroundColor: "rgba(239, 68, 68, 0.1)", borderColor: "#ef4444" }]}>
+                <MaterialIcons name="timer" size={20} color="#ef4444" />
+                <Text style={[styles.timeoutText, { color: "#ef4444" }]}>
+                  Logging out in {timeoutCountdown}s due to inactivity
+                </Text>
+                <TouchableOpacity 
+                  onPress={() => {
+                    setShowTimeoutWarning(false);
+                    resetInactivityTimer();
                   }}
-                  onBlur={() => validateName(fullName)}
-                  editable={!loading}
-                  style={[
-                    styles.input,
-                    {
-                      color: theme.text,
-                      borderColor: nameError ? "#ef4444" : theme.subtle,
-                    },
-                  ]}
-                />
-                {nameError ? (
-                  <Text style={styles.errorText}>{nameError}</Text>
-                ) : null}
-              </View>
-
-              <View style={styles.inputWrapper}>
-                <View style={styles.inputIconContainer}>
-                  <MaterialIcons name="email" size={20} color={theme.subtle} />
-                </View>
-                <TextInput
-                  placeholder="Email address"
-                  placeholderTextColor={theme.subtle}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  autoComplete="email"
-                  textContentType="emailAddress"
-                  value={email}
-                  onChangeText={(text) => {
-                    setEmail(text);
-                    if (emailError) validateEmail(text);
-                  }}
-                  onBlur={() => validateEmail(email)}
-                  editable={!loading}
-                  style={[
-                    styles.input,
-                    {
-                      color: theme.text,
-                      borderColor: emailError ? "#ef4444" : theme.subtle,
-                    },
-                  ]}
-                />
-                {emailError ? (
-                  <Text style={styles.errorText}>{emailError}</Text>
-                ) : null}
-              </View>
-
-              <View style={styles.inputWrapper}>
-                <View style={styles.inputIconContainer}>
-                  <MaterialIcons name="lock" size={20} color={theme.subtle} />
-                </View>
-                <TextInput
-                  placeholder="Password (min 6 characters)"
-                  placeholderTextColor={theme.subtle}
-                  secureTextEntry={!showPassword}
-                  autoComplete="password-new"
-                  textContentType="newPassword"
-                  value={password}
-                  onChangeText={(text) => {
-                    setPassword(text);
-                    const strength = calculatePasswordStrength(text);
-                    setPasswordStrength(strength);
-                    if (passwordError) validatePassword(text);
-                    if (confirmPassword && confirmPasswordError) {
-                      validateConfirmPassword(confirmPassword);
-                    }
-                  }}
-                  onBlur={() => validatePassword(password)}
-                  editable={!loading}
-                  style={[
-                    styles.input,
-                    {
-                      color: theme.text,
-                      borderColor: passwordError ? "#ef4444" : theme.subtle,
-                      paddingRight: 50,
-                    },
-                  ]}
-                />
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  style={styles.eyeIcon}
-                  disabled={!password}
+                  style={styles.stayLoggedButton}
                 >
-                  <MaterialIcons
-                    name={showPassword ? "visibility-off" : "visibility"}
-                    size={20}
-                    color={password ? theme.subtle : "#e5e7eb"}
-                  />
+                  <Text style={{ color: "#ef4444", fontWeight: "700", fontSize: 12 }}>Stay</Text>
                 </TouchableOpacity>
-                
-                {password && !passwordError && passwordStrength.text ? (
-                  <View style={styles.strengthIndicator}>
-                    <View style={styles.strengthBars}>
-                      {[1, 2, 3, 4, 5].map((bar) => (
-                        <View
-                          key={bar}
-                          style={[
-                            styles.strengthBar,
-                            {
-                              backgroundColor:
-                                bar <= passwordStrength.level
-                                  ? passwordStrength.color
-                                  : "#e5e7eb",
-                            },
-                          ]}
-                        />
-                      ))}
-                    </View>
-                    <Text style={[styles.strengthText, { color: passwordStrength.color }]}>
-                      Password Strength: {passwordStrength.text}
-                    </Text>
-                  </View>
-                ) : null}
-                
-                {passwordError ? (
-                  <Text style={styles.errorText}>{passwordError}</Text>
-                ) : null}
               </View>
+            )}
 
-              <View style={styles.inputWrapper}>
-                <View style={styles.inputIconContainer}>
-                  <MaterialIcons name="lock-outline" size={20} color={theme.subtle} />
-                </View>
-                <TextInput
-                  placeholder="Confirm Password"
-                  placeholderTextColor={theme.subtle}
-                  secureTextEntry={!showConfirmPassword}
-                  autoComplete="password-new"
-                  textContentType="newPassword"
-                  value={confirmPassword}
-                  onChangeText={(text) => {
-                    setConfirmPassword(text);
-                    if (confirmPasswordError) validateConfirmPassword(text);
-                  }}
-                  onBlur={() => validateConfirmPassword(confirmPassword)}
-                  onSubmitEditing={handleRegister}
-                  editable={!loading}
-                  style={[
-                    styles.input,
-                    {
-                      color: theme.text,
-                      borderColor: confirmPasswordError ? "#ef4444" : theme.subtle,
-                      paddingRight: 50,
-                    },
-                  ]}
-                />
-                <TouchableOpacity
-                  onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                  style={styles.eyeIcon}
-                  disabled={!confirmPassword}
-                >
-                  <MaterialIcons
-                    name={showConfirmPassword ? "visibility-off" : "visibility"}
-                    size={20}
-                    color={confirmPassword ? theme.subtle : "#e5e7eb"}
-                  />
-                </TouchableOpacity>
-                {confirmPasswordError ? (
-                  <Text style={styles.errorText}>{confirmPasswordError}</Text>
-                ) : null}
-              </View>
-
-              <View style={styles.securityNotice}>
-                <MaterialIcons name="mark-email-unread" size={16} color={theme.subtle} />
-                <Text style={[styles.securityNoticeText, { color: theme.subtle }]}>
-                  You'll receive a verification email after registration
+            {lockoutTime && remainingTime > 0 && (
+              <View style={[styles.lockoutBanner, { backgroundColor: "rgba(239, 68, 68, 0.1)", borderColor: "#ef4444" }]}>
+                <MaterialIcons name="lock" size={20} color="#ef4444" />
+                <Text style={[styles.lockoutText, { color: "#ef4444" }]}>
+                  Account locked: {formatTime(remainingTime)}
                 </Text>
               </View>
+            )}
 
-              {loading && (
-                <View style={styles.loadingContainer}>
-                  <ActivityIndicator size="small" color={theme.accent} />
-                  <Text style={[styles.loadingText, { color: theme.subtle }]}>
-                    Creating your secure account...
-                  </Text>
-                </View>
-              )}
+            {loginAttempts > 0 && loginAttempts < MAX_LOGIN_ATTEMPTS && !lockoutTime && (
+              <View style={[styles.warningBanner, { backgroundColor: "rgba(245, 158, 11, 0.1)", borderColor: "#f59e0b" }]}>
+                <MaterialIcons name="warning" size={18} color="#f59e0b" />
+                <Text style={[styles.warningText, { color: "#f59e0b" }]}>
+                  {MAX_LOGIN_ATTEMPTS - loginAttempts} login attempt{MAX_LOGIN_ATTEMPTS - loginAttempts > 1 ? 's' : ''} remaining
+                </Text>
+              </View>
+            )}
 
-              <TouchableOpacity
+            <View style={styles.inputWrapper}>
+              <View style={styles.inputIconContainer}>
+                <MaterialIcons name="email" size={20} color={theme.subtle} />
+              </View>
+              <TextInput
+                placeholder="Email address"
+                placeholderTextColor={theme.subtle}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                autoComplete="email"
+                textContentType="emailAddress"
+                value={email}
+                onChangeText={(text) => {
+                  setEmail(text);
+                  if (emailError) validateEmail(text);
+                  resetInactivityTimer();
+                }}
+                onBlur={() => validateEmail(email)}
+                editable={!loading && !lockoutTime}
                 style={[
-                  styles.primaryButton,
-                  { backgroundColor: theme.accent },
-                  loading && styles.disabledButton,
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: emailError ? "#ef4444" : theme.subtle,
+                  },
                 ]}
-                onPress={handleRegister}
-                disabled={loading}
-                activeOpacity={0.8}
-              >
-                {loading ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <>
-                    <MaterialIcons name="how-to-reg" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-                    <Text style={styles.primaryButtonText}>Create Secure Account</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              />
+              {emailError ? (
+                <Text style={styles.errorText}>{emailError}</Text>
+              ) : null}
+            </View>
 
-              <View style={styles.securityBadge}>
-                <MaterialIcons name="verified-user" size={14} color="#22c55e" />
-                <Text style={[styles.securityText, { color: theme.subtle }]}>
-                  256-bit encryption • Email verification
-                </Text>
+            <View style={styles.inputWrapper}>
+              <View style={styles.inputIconContainer}>
+                <MaterialIcons name="lock" size={20} color={theme.subtle} />
               </View>
-
-              <View style={styles.divider}>
-                <View style={[styles.dividerLine, { backgroundColor: theme.subtle }]} />
-                <Text style={[styles.dividerText, { color: theme.subtle }]}>or</Text>
-                <View style={[styles.dividerLine, { backgroundColor: theme.subtle }]} />
-              </View>
-
+              <TextInput
+                placeholder="Password"
+                placeholderTextColor={theme.subtle}
+                secureTextEntry={!showPassword}
+                autoComplete="password"
+                textContentType="password"
+                value={password}
+                onChangeText={(text) => {
+                  setPassword(text);
+                  if (passwordError) validatePassword(text);
+                  resetInactivityTimer();
+                }}
+                onBlur={() => validatePassword(password)}
+                onSubmitEditing={handleLogin}
+                editable={!loading && !lockoutTime}
+                style={[
+                  styles.input,
+                  {
+                    color: theme.text,
+                    borderColor: passwordError ? "#ef4444" : theme.subtle,
+                    paddingRight: 50,
+                  },
+                ]}
+              />
               <TouchableOpacity
-                onPress={() => router.push("/auth/login")}
-                style={styles.linkWrapper}
-                disabled={loading}
-                activeOpacity={0.7}
+                onPress={() => setShowPassword(!showPassword)}
+                style={styles.eyeIcon}
+                disabled={!password}
               >
-                <Text style={[styles.linkText, { color: theme.subtle }]}>
-                  Already have an account?{" "}
-                  <Text style={{ color: theme.accent, fontWeight: "700" }}>Login here</Text>
-                </Text>
+                <MaterialIcons
+                  name={showPassword ? "visibility-off" : "visibility"}
+                  size={20}
+                  color={password ? theme.subtle : "#e5e7eb"}
+                />
               </TouchableOpacity>
-            </Animated.View>
-          </View>
-        </ScrollView>
+              {passwordError ? (
+                <Text style={styles.errorText}>{passwordError}</Text>
+              ) : null}
+            </View>
+
+            <TouchableOpacity
+              onPress={handleForgotPassword}
+              style={styles.forgotPasswordLink}
+              disabled={loading || lockoutTime}
+            >
+              <Text style={[styles.forgotPasswordText, { color: theme.accent }]}>
+                Forgot Password?
+              </Text>
+            </TouchableOpacity>
+
+            {loading && (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="small" color={theme.accent} />
+                <Text style={[styles.loadingText, { color: theme.subtle }]}>
+                  Authenticating securely...
+                </Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.accent },
+                (loading || lockoutTime) && styles.disabledButton,
+              ]}
+              onPress={handleLogin}
+              disabled={loading || lockoutTime}
+              activeOpacity={0.8}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <>
+                  <MaterialIcons name="login" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+                  <Text style={styles.primaryButtonText}>
+                    {lockoutTime ? "Account Locked" : "Secure Login"}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.securityBadge}>
+              <MaterialIcons name="verified-user" size={14} color="#22c55e" />
+              <Text style={[styles.securityText, { color: theme.subtle }]}>
+                End-to-end encrypted connection
+              </Text>
+            </View>
+
+            <View style={styles.divider}>
+              <View style={[styles.dividerLine, { backgroundColor: theme.subtle }]} />
+              <Text style={[styles.dividerText, { color: theme.subtle }]}>or</Text>
+              <View style={[styles.dividerLine, { backgroundColor: theme.subtle }]} />
+            </View>
+
+            <TouchableOpacity
+              onPress={() => router.push("/auth/register")}
+              style={styles.linkWrapper}
+              disabled={loading}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.linkText, { color: theme.subtle }]}>
+                Don't have an account?{" "}
+                <Text style={{ color: theme.accent, fontWeight: "700" }}>Sign up securely</Text>
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -627,10 +578,6 @@ export default function Register() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  scrollContent: {
-    flexGrow: 1,
-    paddingVertical: 20,
-  },
   centerWrapper: {
     flex: 1,
     justifyContent: "center",
@@ -668,6 +615,52 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     lineHeight: 22,
   },
+  timeoutBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+    gap: 8,
+  },
+  timeoutText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  stayLoggedButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderRadius: 8,
+  },
+  lockoutBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+    gap: 8,
+  },
+  lockoutText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  warningBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+    gap: 6,
+  },
+  warningText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
   inputWrapper: {
     marginBottom: 20,
     position: "relative",
@@ -697,37 +690,14 @@ const styles = StyleSheet.create({
     marginLeft: 16,
     fontWeight: "500",
   },
-  strengthIndicator: {
-    marginTop: 8,
-    marginLeft: 16,
+  forgotPasswordLink: {
+    alignSelf: "flex-end",
+    marginBottom: 16,
+    marginTop: -10,
   },
-  strengthBars: {
-    flexDirection: "row",
-    gap: 4,
-    marginBottom: 4,
-  },
-  strengthBar: {
-    flex: 1,
-    height: 4,
-    borderRadius: 2,
-  },
-  strengthText: {
-    fontSize: 12,
+  forgotPasswordText: {
+    fontSize: 13,
     fontWeight: "600",
-  },
-  securityNotice: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    backgroundColor: "rgba(34, 197, 94, 0.1)",
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-    gap: 8,
-  },
-  securityNoticeText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
   },
   loadingContainer: {
     flexDirection: "row",
