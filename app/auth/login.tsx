@@ -1,7 +1,7 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from "expo-router";
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from "firebase/auth";
+import { signInWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification } from "firebase/auth";
 import React, { useContext, useState, useRef, useEffect } from "react";
 import {
   ActivityIndicator,
@@ -23,7 +23,7 @@ import { ThemeContext } from "../_layout";
 
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION = 15 * 60 * 1000;
-const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 const PASSWORD_VISIBLE_TIMEOUT = 5000;
 
 export default function Login() {
@@ -282,8 +282,8 @@ export default function Login() {
     if (lockoutTime && Date.now() < lockoutTime) {
       const minutes = Math.ceil(remainingTime / 60);
       Alert.alert(
-        "Account Temporarily Locked",
-        `Too many failed login attempts. Please wait ${minutes} minute${minutes > 1 ? 's' : ''} before trying again.`,
+        "Account Locked",
+        `Too many failed login attempts. Please try again in ${minutes} minute${minutes !== 1 ? 's' : ''}.\n\nOr use "Forgot Password?" to reset your password.`,
         [{ text: "OK" }]
       );
       return;
@@ -291,22 +291,51 @@ export default function Login() {
 
     Keyboard.dismiss();
 
-    const emailValid = validateEmail(email);
-    const passwordValid = validatePassword(password);
+    const isEmailValid = validateEmail(email);
+    const isPasswordValid = validatePassword(password);
 
-    if (!emailValid || !passwordValid) return;
+    if (!isEmailValid || !isPasswordValid) {
+      return;
+    }
 
     setLoading(true);
+    setEmailError("");
+    setPasswordError("");
 
     try {
-      await signInWithEmailAndPassword(auth, sanitizeInput(email), password);
-      
-      setLoginAttempts(0);
+      const sanitizedEmail = sanitizeInput(email);
+      const userCredential = await signInWithEmailAndPassword(auth, sanitizedEmail, password);
+
+      if (!userCredential.user.emailVerified) {
+        setLoading(false);
+        Alert.alert(
+          "Email Not Verified",
+          "Please verify your email before logging in. Check your inbox for the verification email.",
+          [
+            {
+              text: "Resend Email",
+              onPress: async () => {
+                try {
+                  await sendEmailVerification(userCredential.user);
+                  Alert.alert("✓ Verification Email Sent", "Check your inbox and spam folder.");
+                } catch (error) {
+                  Alert.alert("Error", "Unable to send verification email. Please try again later.");
+                }
+              }
+            },
+            { text: "OK" }
+          ]
+        );
+        await auth.signOut();
+        return;
+      }
+
       await AsyncStorage.removeItem('loginAttempts');
       await AsyncStorage.removeItem('loginLockoutTime');
-      
-      setPassword("");
-      
+      setLoginAttempts(0);
+      setLockoutTime(null);
+
+      setLoading(false);
       router.replace("/(tabs)");
     } catch (error) {
       setLoading(false);
@@ -314,49 +343,52 @@ export default function Login() {
 
       const newAttempts = loginAttempts + 1;
       setLoginAttempts(newAttempts);
-      await AsyncStorage.setItem('loginAttempts', newAttempts.toString());
+
+      try {
+        await AsyncStorage.setItem('loginAttempts', newAttempts.toString());
+      } catch (storageError) {
+        console.error("Error saving attempts:", storageError);
+      }
 
       if (newAttempts >= MAX_LOGIN_ATTEMPTS) {
         const lockTime = Date.now() + LOCKOUT_DURATION;
         setLockoutTime(lockTime);
-        await AsyncStorage.setItem('loginLockoutTime', lockTime.toString());
+        try {
+          await AsyncStorage.setItem('loginLockoutTime', lockTime.toString());
+        } catch (storageError) {
+          console.error("Error saving lockout time:", storageError);
+        }
         
         Alert.alert(
           "Account Locked",
-          `Too many failed login attempts. Your account is locked for 15 minutes for security purposes.`,
+          `Too many failed login attempts. Your account has been locked for 15 minutes.\n\nYou can use "Forgot Password?" to reset your password immediately.`,
           [{ text: "OK" }]
         );
         return;
       }
 
-      let title = "Login Failed";
-      let message = "Invalid email or password";
-      const attemptsLeft = MAX_LOGIN_ATTEMPTS - newAttempts;
+      const remainingAttempts = MAX_LOGIN_ATTEMPTS - newAttempts;
+
+      let errorMessage = `Invalid email or password.\n\n${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining before account lockout.`;
 
       if (error.code === "auth/user-not-found") {
-        message = `No account found with this email. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
+        errorMessage = `No account found with this email.\n\n${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`;
       } else if (error.code === "auth/wrong-password") {
-        message = `Incorrect password. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
-      } else if (error.code === "auth/invalid-credential") {
-        message = `Invalid email or password. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining.`;
+        errorMessage = `Incorrect password.\n\n${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining before account lockout.`;
+      } else if (error.code === "auth/invalid-email") {
+        errorMessage = "Invalid email format.";
       } else if (error.code === "auth/too-many-requests") {
-        title = "Too Many Attempts";
-        message = "Account temporarily locked by Firebase. Please reset your password or wait before trying again.";
+        errorMessage = "Too many failed attempts. Please try again later or reset your password.";
       } else if (error.code === "auth/network-request-failed") {
-        title = "Network Error";
-        message = "Please check your internet connection and try again.";
-      } else if (error.code === "auth/user-disabled") {
-        title = "Account Disabled";
-        message = "This account has been disabled. Please contact support.";
+        errorMessage = "Network error. Please check your internet connection.";
       }
 
-      setTimeout(() => {
-        Alert.alert(title, message, [{ text: "OK" }]);
-      }, 100);
-      return;
+      Alert.alert(
+        "Login Failed",
+        errorMessage,
+        [{ text: "OK" }]
+      );
     }
-    
-    setLoading(false);
   };
 
   const formatTime = (seconds) => {
@@ -377,14 +409,14 @@ export default function Login() {
               styles.card,
               {
                 backgroundColor: theme.card,
-                borderColor: theme.accent,
+                borderColor: theme.accent + "30",
                 opacity: fadeAnim,
                 transform: [{ translateY: slideAnim }],
               },
             ]}
           >
             <View style={styles.iconCircle}>
-              <MaterialIcons name="security" size={26} color={theme.accent} />
+              <MaterialIcons name="shield" size={28} color="#22c55e" />
             </View>
 
             <Text style={[styles.title, { color: theme.text }]}>Secure Login</Text>
@@ -396,34 +428,31 @@ export default function Login() {
               <View style={[styles.timeoutBanner, { backgroundColor: "rgba(239, 68, 68, 0.1)", borderColor: "#ef4444" }]}>
                 <MaterialIcons name="timer" size={20} color="#ef4444" />
                 <Text style={[styles.timeoutText, { color: "#ef4444" }]}>
-                  Logging out in {timeoutCountdown}s due to inactivity
+                  Auto-logout in {timeoutCountdown}s due to inactivity
                 </Text>
-                <TouchableOpacity 
-                  onPress={() => {
-                    setShowTimeoutWarning(false);
-                    resetInactivityTimer();
-                  }}
+                <TouchableOpacity
+                  onPress={resetInactivityTimer}
                   style={styles.stayLoggedButton}
                 >
-                  <Text style={{ color: "#ef4444", fontWeight: "700", fontSize: 12 }}>Stay</Text>
+                  <Text style={{ color: "#ef4444", fontWeight: "600", fontSize: 12 }}>Stay</Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {lockoutTime && remainingTime > 0 && (
+            {lockoutTime && (
               <View style={[styles.lockoutBanner, { backgroundColor: "rgba(239, 68, 68, 0.1)", borderColor: "#ef4444" }]}>
                 <MaterialIcons name="lock" size={20} color="#ef4444" />
                 <Text style={[styles.lockoutText, { color: "#ef4444" }]}>
-                  Account locked: {formatTime(remainingTime)}
+                  Account locked. Unlocking in {formatTime(remainingTime)}
                 </Text>
               </View>
             )}
 
-            {loginAttempts > 0 && loginAttempts < MAX_LOGIN_ATTEMPTS && !lockoutTime && (
-              <View style={[styles.warningBanner, { backgroundColor: "rgba(245, 158, 11, 0.1)", borderColor: "#f59e0b" }]}>
-                <MaterialIcons name="warning" size={18} color="#f59e0b" />
-                <Text style={[styles.warningText, { color: "#f59e0b" }]}>
-                  {MAX_LOGIN_ATTEMPTS - loginAttempts} login attempt{MAX_LOGIN_ATTEMPTS - loginAttempts > 1 ? 's' : ''} remaining
+            {!lockoutTime && loginAttempts > 0 && (
+              <View style={[styles.warningBanner, { backgroundColor: "rgba(234, 179, 8, 0.1)", borderColor: "#facc15" }]}>
+                <MaterialIcons name="warning" size={18} color="#facc15" />
+                <Text style={[styles.warningText, { color: "#facc15" }]}>
+                  {MAX_LOGIN_ATTEMPTS - loginAttempts} login attempt{MAX_LOGIN_ATTEMPTS - loginAttempts !== 1 ? 's' : ''} remaining
                 </Text>
               </View>
             )}
@@ -435,18 +464,14 @@ export default function Login() {
               <TextInput
                 placeholder="Email address"
                 placeholderTextColor={theme.subtle}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
-                textContentType="emailAddress"
                 value={email}
                 onChangeText={(text) => {
                   setEmail(text);
-                  if (emailError) validateEmail(text);
+                  if (emailError) setEmailError("");
                   resetInactivityTimer();
                 }}
-                onBlur={() => validateEmail(email)}
-                editable={!loading && !lockoutTime}
+                autoCapitalize="none"
+                keyboardType="email-address"
                 style={[
                   styles.input,
                   {
@@ -467,18 +492,13 @@ export default function Login() {
               <TextInput
                 placeholder="Password"
                 placeholderTextColor={theme.subtle}
-                secureTextEntry={!showPassword}
-                autoComplete="password"
-                textContentType="password"
                 value={password}
                 onChangeText={(text) => {
                   setPassword(text);
-                  if (passwordError) validatePassword(text);
+                  if (passwordError) setPasswordError("");
                   resetInactivityTimer();
                 }}
-                onBlur={() => validatePassword(password)}
-                onSubmitEditing={handleLogin}
-                editable={!loading && !lockoutTime}
+                secureTextEntry={!showPassword}
                 style={[
                   styles.input,
                   {
@@ -507,7 +527,7 @@ export default function Login() {
             <TouchableOpacity
               onPress={handleForgotPassword}
               style={styles.forgotPasswordLink}
-              disabled={loading || lockoutTime}
+              disabled={loading}
             >
               <Text style={[styles.forgotPasswordText, { color: theme.accent }]}>
                 Forgot Password?
