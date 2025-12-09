@@ -179,7 +179,7 @@ export default function Login() {
   };
 
   const sanitizeInput = (input) => {
-    return input.replace(/[<>\"'`]/g, '').trim();
+    return input.replace(/[<>"'`]/g, '').trim();
   };
 
   const validateEmail = (email) => {
@@ -713,7 +713,7 @@ const styles = StyleSheet.create({
   forgotPasswordLink: {
     alignSelf: "flex-end",
     marginBottom: 16,
-    marginTop: -10,
+    marginTop: 10,
   },
   forgotPasswordText: {
     fontSize: 13,
